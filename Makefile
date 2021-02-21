@@ -1,0 +1,2 @@
+PDF:
+	pdflatex $(file)
