@@ -224,7 +224,7 @@ func Step1(impls []Term) []Term {
 		}
 	}
 	// К новым полученным импликантам добавляем те, что не были склеены
-	impls = append(MakeUniqueSet(unaffectedTerms), MakeUniqueSet(glued)...)
+	impls = MakeUniqueSet(append(unaffectedTerms, glued...))
 	// Запускаем следующий шаг рекурсии
 	return Step1(impls)
 }
@@ -276,18 +276,16 @@ func NewTable(prime, source []Term) Table {
 	return t
 }
 
-// Данная функция проверяет является ли набор строк под номерами rowsTakeOff[i]
-// избыточными
-func (t Table) IsRowsExcess(rowsTakeOff []int) bool {
+// Данная функция проверяет является ли набор строк под номерами
+// из rowsTakeOff избыточными
+func (t Table) IsRowsExcess(rowsTakeOff map[int]struct{}) bool {
 	// Создаем массив меток о том, что столбцы были покрыты
 	coveredColumns := make([]bool, len(t.Columns))
 	// Проверяем каждую строку
-	Loop: for i := range t.Rows {
+	for i := range t.Rows {
 		// Если номер строки содержится в rowsTakeOff, то переходим к следующей строке
-		for _, row := range rowsTakeOff {
-			if i == row {
-				continue Loop
-			}
+		if _, found := rowsTakeOff[i]; found {
+			continue
 		}
 		// Ставим метки о том, какие столбцы были покрыты
 		for j := range t.Columns {
@@ -307,7 +305,8 @@ func (t Table) IsRowsExcess(rowsTakeOff []int) bool {
 }
 
 // Реализует 2, 3 и 4 шаги алгоритма
-func Steps2and3and4(prime, source []Term) Table {
+// Возвращает таблицу и набор существенных строк
+func Steps2and3and4(prime, source []Term) (Table, map[int]struct{}) {
 	// Создаем таблицу
 	t := NewTable(prime, source)
 	// Ищем существенные строки и столбцы
@@ -328,44 +327,51 @@ func Steps2and3and4(prime, source []Term) Table {
 			t.Rows[rowWithMark].IsMarked = true
 		}
 	}
-	// Исключаем все строки, которые не существенны
-	newPrime := make([]Term, 0)
+	// Составляем набор существенных строк
+	essentials := make(map[int]struct{}, 0)
 	for i := range t.Rows {
 		if t.Rows[i].IsMarked {
-			newPrime = append(newPrime, t.Rows[i].Term)
+			essentials[i] = struct{}{}
 		}
 	}
-	// Создаем новую таблицу на основе существенных строк
-	return NewTable(newPrime, source)
+	return t, essentials
 }
 
 // Функция реализует 5 шаг алгоритма
-// Первый рекурсивный вызов полагается запускать с excessRows == nil
-func Step5(t Table, excessRows []int) []Term {
+func Step5(t Table, essentialRows, excessRows map[int]struct{}) []Term {
 	// possibleResults - все доступные наборы импликант, покрывающие ФАЛ
 	possibleResults := make([][]Term, 0)
 	// Добавляем тривиальный случай - все строки в таблице
 	trivialResult := make([]Term, 0, len(t.Rows))
-	for _, row := range t.Rows {
+	for i, row := range t.Rows {
+		if _, found := excessRows[i]; found {
+			continue
+		}
 		trivialResult = append(trivialResult, row.Term)
 	}
 	possibleResults = append(possibleResults, trivialResult)
 
 	// Проходим по всем строкам. Исключаем те, которые являются избыточными и
 	// рекурсивно вызываем шаг 5 алгоритма для нового набора строк
-	Loop: for i := range t.Rows {
-		// Проверяем не была ли ранее исключена данная строка
-		for _, row := range excessRows {
-			if i == row {
-				continue Loop
-			}
+	// Если строка существенная (essential), то не исключаем ее в любом случае
+	for i := range t.Rows {
+		// Проверяем не является ли строка существенной
+		if _, found := essentialRows[i]; found {
+			continue
 		}
+		// Проверяем не была ли ранее исключена данная строка
+		if _, found := excessRows[i]; found {
+			continue
+		}
+		// Предполагаем, что строка i избыточная
+		excessRows[i] = struct{}{}
 		// Если строка под номером i является избыточной, то отбрасываем ее и
 		// к доступному набору импликант, покрывающих ФАЛ, прибавляем результат
 		// рекурсивного вызова шага 5 без строки i
-		if t.IsRowsExcess(append(excessRows, i)) {
-			possibleResults = append(possibleResults, Step5(t, append(excessRows, i)))
+		if t.IsRowsExcess(excessRows) {
+			possibleResults = append(possibleResults, Step5(t, essentialRows, excessRows))
 		}
+		delete(excessRows, i)
 	}
 
 	// Ищем из доступных наборов импликант, покрывающих ФАЛ, тот, что является минимальным
@@ -392,12 +398,12 @@ func Step5(t Table, excessRows []int) []Term {
 }
 
 // Функция возвращает СДНФ от ФАЛ
-func MakeSDNF(f []bool) []Term {
+func MakeSDNF(f []int) []Term {
 	variableNumber := int(math.Log2(float64(len(f))))
 	sdnf := make([]Term, 0, len(f))
 	format := "%0" + strconv.Itoa(variableNumber) + "b"
 	for i := range f {
-		if f[i] == true {
+		if f[i] == 1 {
 			term := make(Term, 0, variableNumber)
 			binaryString := fmt.Sprintf(format, i)
 			for _, char := range binaryString {
@@ -430,25 +436,39 @@ func Format(impls []Term) string {
 }
 
 func main() {
-	f := []bool{
-		true,  // 0000
-		true,  // 0001
-		true,  // 0010
-		false,  // 0011
-		true,  // 0100
-		true,  // 0101
-		true,  // 0110
-		false,  // 0111
-		false,  // 1000
-		true,  // 1001
-		false,  // 1010
-		false,  // 1011
-		true,  // 1100
-		true,  // 1101
-		true,  // 1110
-		false,  // 1111
+	f := []int{
+		0, 0, 0, 1, 0, 0, 1, 0, 0, 1, // 00-09
+		0, 1, 0, 1, 1, 1, 1, 0, 1, 1, // 10-19
+		1, 0, 0, 0, 0, 0, 0, 1, 0, 0, // 20-29
+		1, 1, 0, 1, 1, 1, 0, 0, 1, 0, // 30-39
+		0, 1, 0, 1, 1, 1, 0, 1, 1, 0, // 40-49
+		1, 1, 1, 0, 1, 1, 0, 1, 0, 0, // 50-59
+		0, 1, 0, 1,                   // 60-63
 	}
 	impls := MakeSDNF(f)
-	result := Step5(Steps2and3and4(Step1(impls), impls), nil)
-	fmt.Println(Format(result))
+	primeImpls := Step1(impls)
+	table, essentialRows := Steps2and3and4(primeImpls, impls)
+	excessRows := make(map[int]struct{})
+	result := Step5(table, essentialRows, excessRows)
+	// Сделаем проверку на то, что все исходные импликанты покрыты
+	covered := 0
+	total := 0
+	for _, sourceImpl := range impls {
+		isCover := false
+		for _, minImpl := range result {
+			if minImpl.Covers(sourceImpl) {
+				isCover = true
+			}
+		}
+		if !isCover {
+			fmt.Print("E")
+		} else {
+			covered++
+			fmt.Print(".")
+		}
+		total++
+	}
+	fmt.Println()
+	fmt.Printf("total coverage: %3.4f%%\n", float32(covered)/float32(total)*100)
+	fmt.Printf("result: %s\n", Format(result))
 }
