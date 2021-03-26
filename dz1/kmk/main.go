@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/ernestosuarez/itertools"
 	"math"
 	"strconv"
 )
@@ -276,15 +277,15 @@ func NewTable(prime, source []Term) Table {
 	return t
 }
 
-// Данная функция проверяет является ли набор строк под номерами
-// из rowsTakeOff избыточными
-func (t Table) IsRowsExcess(rowsTakeOff map[int]struct{}) bool {
+// Данная функция проверяет покрывает ли набор строк под номерами
+// из rows все импликанты
+func (t Table) IsRowsCovers(rows map[int]struct{}) bool {
 	// Создаем массив меток о том, что столбцы были покрыты
 	coveredColumns := make([]bool, len(t.Columns))
 	// Проверяем каждую строку
 	for i := range t.Rows {
-		// Если номер строки содержится в rowsTakeOff, то переходим к следующей строке
-		if _, found := rowsTakeOff[i]; found {
+		// Если номер строки не содержится в rowsTakeOff, то переходим к следующей строке
+		if _, found := rows[i]; !found {
 			continue
 		}
 		// Ставим метки о том, какие столбцы были покрыты
@@ -337,64 +338,48 @@ func Steps2and3and4(prime, source []Term) (Table, map[int]struct{}) {
 	return t, essentials
 }
 
+func GetCombinations(t Table, n int) []map[int]struct{} {
+	indices := make([]int, len(t.Rows))
+	for i := 0; i < len(t.Rows); i++ {
+		indices[i] = i
+	}
+
+	combinations := make([]map[int]struct{}, 0)
+	for indexCombination := range itertools.CombinationsInt(indices, n) {
+		combination := make(map[int]struct{}, len(indexCombination))
+		for _, index := range indexCombination {
+			combination[index] = struct{}{}
+		}
+		combinations = append(combinations, combination)
+	}
+	return combinations
+}
+
 // Функция реализует 5 шаг алгоритма
-func Step5(t Table, essentialRows, excessRows map[int]struct{}) []Term {
-	// possibleResults - все доступные наборы импликант, покрывающие ФАЛ
-	possibleResults := make([][]Term, 0)
-	// Добавляем тривиальный случай - все строки в таблице
-	trivialResult := make([]Term, 0, len(t.Rows))
-	for i, row := range t.Rows {
-		if _, found := excessRows[i]; found {
-			continue
-		}
-		trivialResult = append(trivialResult, row.Term)
-	}
-	possibleResults = append(possibleResults, trivialResult)
-
-	// Проходим по всем строкам. Исключаем те, которые являются избыточными и
-	// рекурсивно вызываем шаг 5 алгоритма для нового набора строк
-	// Если строка существенная (essential), то не исключаем ее в любом случае
-	for i := range t.Rows {
-		// Проверяем не является ли строка существенной
-		if _, found := essentialRows[i]; found {
-			continue
-		}
-		// Проверяем не была ли ранее исключена данная строка
-		if _, found := excessRows[i]; found {
-			continue
-		}
-		// Предполагаем, что строка i избыточная
-		excessRows[i] = struct{}{}
-		// Если строка под номером i является избыточной, то отбрасываем ее и
-		// к доступному набору импликант, покрывающих ФАЛ, прибавляем результат
-		// рекурсивного вызова шага 5 без строки i
-		if t.IsRowsExcess(excessRows) {
-			possibleResults = append(possibleResults, Step5(t, essentialRows, excessRows))
-		}
-		delete(excessRows, i)
-	}
-
-	// Ищем из доступных наборов импликант, покрывающих ФАЛ, тот, что является минимальным
-	var minResult []Term
-	minResultSize := math.MaxInt64
-	for _, result := range possibleResults {
-		// Считаем количество литералов в наборе
-		resultSize := 0
-		for _, term := range result {
-			for _, bit := range term {
-				if bit != Tilde {
-					resultSize++
+func Step5(t Table) []Term {
+	// Перебираем возможные комбинации строк таблицы начиная с 1 до len(t.Rows)
+	for i := 1; i < len(t.Rows); i++ {
+		// Получаем все возможные комбинации из i строк таблицы
+		combinations := GetCombinations(t, i)
+		fmt.Println("combinations from", i, "(", len(combinations), ")")
+		// Проходим по каждой комбинации и проверяем, покрывает ли эта комбинация все строки
+		for _, combination := range combinations {
+			// Если покрывает, что возвращаем термы этой строки таблицы
+			if t.IsRowsCovers(combination) {
+				var result []Term
+				for index := range combination {
+					result = append(result, t.Rows[index].Term)
 				}
+				return result
 			}
 		}
-		// Если количество литералов меньше, того, что было найдено ранее,
-		// то запоминаем этот набор
-		if resultSize < minResultSize {
-			minResult = result
-			minResultSize = resultSize
-		}
 	}
-	return minResult
+	// Если найти комбинацию не нашлось, то возвращаем все исходные термы
+	var trivial []Term
+	for _, row := range t.Rows {
+		trivial = append(trivial, row.Term)
+	}
+	return trivial
 }
 
 // Функция возвращает СДНФ от ФАЛ
@@ -447,9 +432,9 @@ func main() {
 	}
 	impls := MakeSDNF(f)
 	primeImpls := Step1(impls)
-	table, essentialRows := Steps2and3and4(primeImpls, impls)
-	excessRows := make(map[int]struct{})
-	result := Step5(table, essentialRows, excessRows)
+	table, _ := Steps2and3and4(primeImpls, impls)
+	fmt.Println("table size after 4th step:", len(table.Rows))
+	result := Step5(table)
 	// Сделаем проверку на то, что все исходные импликанты покрыты
 	covered := 0
 	total := 0
