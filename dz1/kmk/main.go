@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"github.com/ernestosuarez/itertools"
 	"math"
+	"os"
 	"strconv"
+	"strings"
 )
 
 // Представляет одну переменную в импликанте
@@ -31,6 +33,19 @@ func (b Bit) PrettyString(index int) string {
 	}
 }
 
+func (b Bit) String() string {
+	switch b {
+	case Tilde:
+		return "~"
+	case False:
+		return "0"
+	case True:
+		return "1"
+	default:
+		panic(fmt.Sprintf("bad bit value: %d", b))
+	}
+}
+
 // Представляет любую импликанту (терм) в виде набора переменных
 type Term []Bit
 
@@ -42,6 +57,14 @@ func (a Term) PrettyString() string {
 	var prettyString string
 	for i, bit := range a {
 		prettyString = bit.PrettyString(i) + prettyString
+	}
+	return prettyString
+}
+
+func (a Term) String() string {
+	var prettyString string
+	for _, bit := range a {
+		prettyString = bit.String() + prettyString
 	}
 	return prettyString
 }
@@ -277,6 +300,40 @@ func NewTable(prime, source []Term) Table {
 	return t
 }
 
+func (t Table) PrettyString() string {
+	const cellSize = 6
+	var formatted string
+	formatted += "|" + strings.Repeat(" ", cellSize) + "|"
+	for _, column := range t.Columns {
+		formatted += fmt.Sprintf("%" + strconv.Itoa(cellSize) + "s|", column.Term.String())
+	}
+	rowLen := len(formatted)
+	formatLine := func(i, rowLen int) string {
+		var formatted string
+		underline := "\n" + strings.Repeat("-", rowLen) + "\n"
+		if i == 0 {
+			formatted += underline
+		}
+
+		formatted += fmt.Sprintf("|%" + strconv.Itoa(cellSize) + "s|", t.Rows[i].Term.String())
+		for j := range t.Columns {
+			var mark string
+			if t.Marks[i][j] {
+				mark = strings.Repeat("X", cellSize)
+			} else {
+				mark = "     "
+			}
+			formatted += fmt.Sprintf("%" + strconv.Itoa(cellSize) + "s|", mark)
+		}
+		formatted += underline
+		return formatted
+	}
+	for i := range t.Rows {
+		formatted += formatLine(i, rowLen)
+	}
+	return formatted
+}
+
 // Данная функция проверяет покрывает ли набор строк под номерами
 // из rows все импликанты
 func (t Table) IsRowsCovers(rows map[int]struct{}) bool {
@@ -338,10 +395,16 @@ func Steps2and3and4(prime, source []Term) (Table, map[int]struct{}) {
 	return t, essentials
 }
 
-func GetCombinations(t Table, n int) []map[int]struct{} {
-	indices := make([]int, len(t.Rows))
+func GetCombinations(t Table, n int, essential map[int]struct{}) []map[int]struct{} {
+	var essentials []int
+	for rowIndex := range essential {
+		essentials = append(essentials, rowIndex)
+	}
+	var indices []int
 	for i := 0; i < len(t.Rows); i++ {
-		indices[i] = i
+		if _, found := essential[i]; !found {
+			indices = append(indices, i)
+		}
 	}
 
 	combinations := make([]map[int]struct{}, 0)
@@ -350,17 +413,21 @@ func GetCombinations(t Table, n int) []map[int]struct{} {
 		for _, index := range indexCombination {
 			combination[index] = struct{}{}
 		}
+		for _, index := range essentials {
+			combination[index] = struct{}{}
+		}
 		combinations = append(combinations, combination)
 	}
 	return combinations
 }
 
 // Функция реализует 5 шаг алгоритма
-func Step5(t Table) []Term {
+func Step5(t Table, essential map[int]struct{}) []Term {
 	// Перебираем возможные комбинации строк таблицы начиная с 1 до len(t.Rows)
-	for i := 1; i < len(t.Rows); i++ {
+	var possibleResults [][]Term
+	for i := 1; i < len(t.Rows) - len(essential); i++ {
 		// Получаем все возможные комбинации из i строк таблицы
-		combinations := GetCombinations(t, i)
+		combinations := GetCombinations(t, i, essential)
 		fmt.Println("combinations from", i, "(", len(combinations), ")")
 		// Проходим по каждой комбинации и проверяем, покрывает ли эта комбинация все строки
 		for _, combination := range combinations {
@@ -370,7 +437,7 @@ func Step5(t Table) []Term {
 				for index := range combination {
 					result = append(result, t.Rows[index].Term)
 				}
-				return result
+				possibleResults = append(possibleResults, result)
 			}
 		}
 	}
@@ -379,7 +446,21 @@ func Step5(t Table) []Term {
 	for _, row := range t.Rows {
 		trivial = append(trivial, row.Term)
 	}
-	return trivial
+	possibleResults = append(possibleResults, trivial)
+
+	minComplexity := math.MaxInt32
+	var minResult []Term
+	for _, result := range possibleResults {
+		complexity := 0
+		for _, term := range result {
+			complexity += len(term)
+		}
+		if complexity < minComplexity {
+			minComplexity = complexity
+			minResult = result
+		}
+	}
+	return minResult
 }
 
 // Функция возвращает СДНФ от ФАЛ
@@ -420,6 +501,28 @@ func Format(impls []Term) string {
 	return result
 }
 
+func PrettyString(terms []Term) string {
+	var formatted string
+	for i, impl := range terms {
+		if i != 0 {
+			formatted += " + "
+		}
+		formatted += impl.PrettyString()
+	}
+	return formatted
+}
+
+func String(terms []Term) string {
+	var formatted string
+	for i, impl := range terms {
+		if i != 0 {
+			formatted += ", "
+		}
+		formatted += impl.String()
+	}
+	return formatted
+}
+
 func main() {
 	f := []int{
 		0, 0, 0, 1, 0, 0, 1, 0, 0, 1, // 00-09
@@ -431,10 +534,26 @@ func main() {
 		0, 1, 0, 1,                   // 60-63
 	}
 	impls := MakeSDNF(f)
+	fmt.Printf("source SDNF: %s\n", String(impls))
+
 	primeImpls := Step1(impls)
-	table, _ := Steps2and3and4(primeImpls, impls)
+	fmt.Printf("prime implicants: %s\n", String(primeImpls))
+
+	table, essential := Steps2and3and4(primeImpls, impls)
+	var coreImpls []Term
+	for index := range essential {
+		coreImpls = append(coreImpls, table.Rows[index].Term)
+	}
+	fmt.Printf("core implicants: %s\n", String(coreImpls))
 	fmt.Println("table size after 4th step:", len(table.Rows))
-	result := Step5(table)
+	file, err := os.Create("./table.txt")
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+	file.Write([]byte(table.PrettyString()))
+
+	result := Step5(table, essential)
 	// Сделаем проверку на то, что все исходные импликанты покрыты
 	covered := 0
 	total := 0
@@ -453,7 +572,15 @@ func main() {
 		}
 		total++
 	}
-	fmt.Println()
 	fmt.Printf("total coverage: %3.4f%%\n", float32(covered)/float32(total)*100)
-	fmt.Printf("result: %s\n", Format(result))
+	formatted := Format(result)
+	count := 0
+	for _, c := range formatted {
+		if c == 'x' {
+			count++
+		}
+	}
+	fmt.Printf("result: %s\n", formatted)
+	fmt.Printf("result complexity %d\n", count)
+	fmt.Printf("implicants in result: %d\n", len(result))
 }
